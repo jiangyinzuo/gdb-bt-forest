@@ -1,0 +1,10 @@
+Thread 1 "t0" running.
+#0  ns::Functor::operator() () at a.cc:10
+#1  std::function<void()>::operator() () const at b.cc:20
+#2  main(int, char**) & at main.cc:30
+
+Thread 2 "t1" running.
+#0  Foo<(int)3>::bar () at foo.cc:40
+#1  Baz<(MyEnum)MyEnum::Val>::qux () noexcept at baz.cc:50
+#2  Worker::run () const& at w.cc:60
+

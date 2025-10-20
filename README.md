@@ -5,7 +5,7 @@ A Python tool that processes GDB backtrace (`bt`) outputs and visualizes them as
 ## Usage
 
 ```bash
-python3 gdb_bt_forest.py test_bt.txt --threads -g name+file+line
+python3 gdb_bt_forest.py test_bt1.txt --threads -g name+file+line
 ```
 
 Output:

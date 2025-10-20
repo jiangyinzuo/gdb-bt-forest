@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# GDB backtrace forest visualizer with wrapped-line handling.
-#
-# Supports grouping (-g name|name+file|name+file+line|full),
-# sibling ordering (--order stable|count|name), and various filters.
-#
+"""
+GDB backtrace forest visualizer (robust edition)
+- Handles terminal-wrapped lines (e.g., from Neovim terminal copy)
+- Correctly partitions by thread (flush-before-switch fix)
+- Default sibling order is input-stable (--order stable)
+- Supports grouping: name | name+file | name+file+line | full
+- Robust function-name extraction that removes only the trailing parameter list,
+  keeping names like operator() and templates with parentheses in non-type params.
+"""
 import argparse
 import re
 import sys
@@ -12,8 +16,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Iterable, Optional
 
+# Frame and thread header detection
 FRAME_RE = re.compile(r"^#(?P<idx>\d+)\s+(?P<rest>.+)$")
 THREAD_RE = re.compile(r"^Thread\s+(?P<tid>\d+)\b")
+
+# Heuristics for file/lib detection
 AT_FILE_RE = re.compile(r"\s+at\s+([^\s:]+)(?::(\d+))?")
 FROM_LIB_RE = re.compile(r"\s+from\s+(\S+)")
 ADDR_PREFIX_RE = re.compile(r"^(0x[0-9a-fA-F]+)\s+in\s+(.+)$")
@@ -105,17 +112,63 @@ class Node:
             self.children[k] = Node(k)
         return self.children[k]
 
+# --- Robust function-name extraction helpers ---
+
+def _trim_trailing_qualifiers(s: str) -> str:
+    """Remove trailing qualifiers after the parameter list (const, noexcept(...), throw(...), &, &&)."""
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"\s+(const|volatile|mutable|noexcept(?:\s*\([^)]*\))?)\s*$", "", s)
+        s = re.sub(r"\s+throw\s*\([^)]*\)\s*$", "", s)
+        s = re.sub(r"\s*[&]{1,2}\s*$", "", s)  # &, &&
+    return s.strip()
+
+def _strip_trailing_param_list(func_part: str) -> str:
+    """Remove only the final '(...)' parameter list from the end, keeping names like 'operator()' intact.
+    Examples:
+      'ns::Functor::operator()()'                    -> 'ns::Functor::operator()'
+      'std::function<void()>::operator()() const'    -> 'std::function<void()>::operator()'
+      'Foo<(int)3>::bar()'                           -> 'Foo<(int)3>::bar'
+      'Baz<(MyEnum)MyEnum::Val>::qux() noexcept'     -> 'Baz<(MyEnum)MyEnum::Val>::qux'
+      'Worker::run() const&'                         -> 'Worker::run'
+    """
+    s = _trim_trailing_qualifiers(func_part)
+    j = s.rfind(')')
+    if j == -1:
+        return s
+    # Ensure the trailing token is ')'
+    if j != len(s) - 1:
+        s2 = s[:j+1].rstrip()
+        if j != len(s2) - 1:
+            return s
+    # Scan backward to find the matching '('
+    depth = 0
+    i = j
+    while i >= 0:
+        if s[i] == ')':
+            depth += 1
+        elif s[i] == '(':
+            depth -= 1
+            if depth == 0:
+                return s[:i].rstrip()
+        i -= 1
+    return s  # unmatched; keep as-is
+
 def frame_key_from_rest(rest: str, grouping: str) -> Tuple[str, Optional[str]]:
-    """Return (display_key, file_or_lib_or_path)."""
+    """Extract a display key from a frame line, honoring grouping mode."""
+    # Strip leading address prefix: "0x... in ..."
     m = ADDR_PREFIX_RE.match(rest)
     if m:
         rest = m.group(2)
-    func_part = rest.split(" at ")[0].split(" from ")[0].strip()
-    func_name = func_part
-    paren = func_part.find("(")
-    if paren != -1:
-        func_name = func_part[:paren].strip()
 
+    # Function/method portion up to ' at ' or ' from '
+    func_part = rest.split(" at ")[0].split(" from ")[0].strip()
+
+    # Robustly remove only the final parameter list
+    func_name = _strip_trailing_param_list(func_part)
+
+    # File/lib + line metadata
     file_or_lib = None
     line_no = None
     m = AT_FILE_RE.search(rest)
@@ -140,12 +193,12 @@ def frame_key_from_rest(rest: str, grouping: str) -> Tuple[str, Optional[str]]:
             return (f"{func_name or func_part}  [{file_or_lib}]", file_or_lib)
         else:
             return (func_name or func_part, None)
-    else:
+    else:  # full
         full = re.sub(r"\s+", " ", rest.strip())
         return (full, file_or_lib)
 
 def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per_thread=False, debug=False) -> Dict[str, List[List[str]]]:
-    """Parse lines into stacks. Thread headers flush the *previous* thread's partial stack (bugfix)."""
+    """Parse lines into stacks. Thread headers flush the current thread's partial stack (bugfix)."""
     stacks_by_thread: Dict[str, List[List[str]]] = defaultdict(list)
     cur_frames: List[str] = []
     cur_thread = "ALL"
@@ -153,7 +206,7 @@ def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per
     for line in lines:
         mt = THREAD_RE.match(line)
         if mt:
-            # BUGFIX: flush current frames to the *current* thread before switching
+            # Flush current frames to the current thread BEFORE switching
             if cur_frames:
                 stacks_by_thread[cur_thread].append(cur_frames)
                 cur_frames = []
@@ -171,11 +224,13 @@ def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per
         rest = mf.group("rest").strip()
         key, _ = frame_key_from_rest(rest, grouping)
 
+        # Filters
         if keep_regs and not match_any(key, keep_regs):
             continue
         if strip_regs and match_any(key, strip_regs):
             continue
 
+        # New stack starts at #0; flush the previous stack
         if idx == 0 and cur_frames:
             stacks_by_thread[cur_thread].append(cur_frames)
             cur_frames = []
@@ -188,6 +243,7 @@ def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per
     return stacks_by_thread
 
 def build_forest(stacks: List[List[str]], reverse=False) -> "Node":
+    """Build a prefix forest (rooted at '<root>'); reverse=False means outermost as root."""
     norm = []
     for s in stacks:
         if s:
@@ -197,7 +253,7 @@ def build_forest(stacks: List[List[str]], reverse=False) -> "Node":
         node = root
         node.count += 1
         for k in stack:
-            node = node.child(k)  # preserves first-seen insertion order
+            node = node.child(k)  # preserves insertion order of first encounter
             node.count += 1
         node.sample_ids.append(sid)
     return root
@@ -211,6 +267,7 @@ def iter_children(node: "Node", order: str):
         return iter(sorted(node.children.items(), key=lambda kv: (-kv[1].count, kv[0])))
 
 def print_forest(root: "Node", total: int, args):
+    # Charset
     if args.ascii:
         T, L, V, S = "+-- ", "`-- ", "|   ", "    "
     else:
@@ -220,9 +277,9 @@ def print_forest(root: "Node", total: int, args):
         pct = (100.0 * c / total) if total else 0.0
         name = k
         if not args.no_color:
-            if pct >= 50: name = ansi(name, "1;31", True)
-            elif pct >= 20: name = ansi(name, "1;33", True)
-            elif pct >= 5: name = ansi(name, "1;36", True)
+            if pct >= 50: name = ansi(name, "1;31", True)      # bold red
+            elif pct >= 20: name = ansi(name, "1;33", True)    # bold yellow
+            elif pct >= 5: name = ansi(name, "1;36", True)     # bold cyan
         return f"{name}  [{c} | {pct:.1f}%]"
 
     def rec(node: "Node", pref: str, depth: int):
@@ -248,6 +305,7 @@ def print_forest(root: "Node", total: int, args):
 def main():
     args = parse_args()
 
+    # Read data
     if args.input == "-":
         data = sys.stdin.read().splitlines()
     else:
@@ -257,8 +315,10 @@ def main():
     keep_regs = compile_regexes(args.keep) if args.keep else []
     strip_regs = compile_regexes(args.strip) if args.strip else []
 
+    # 1) unwrap hard-wrapped lines
     unwrapped = reflow_wrapped(data, debug=args.debug)
 
+    # 2) parse into stacks (optionally per-thread)
     stacks_by_thread = parse_stacks(unwrapped, args.group, keep_regs, strip_regs, per_thread=args.threads, debug=args.debug)
 
     if not stacks_by_thread or all(len(v)==0 for v in stacks_by_thread.values()):
