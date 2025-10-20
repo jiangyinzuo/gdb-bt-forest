@@ -4,6 +4,8 @@ A Python tool that processes GDB backtrace (`bt`) outputs and visualizes them as
 
 ## Usage
 
+**Basic Usage**
+
 ```bash
 python3 gdb_bt_forest.py test_bt1.txt --threads -g name+file+line
 ```
@@ -24,6 +26,15 @@ Output:
         └── worker_thread  [1 | 100.0%]
             └── sleep  [1 | 100.0%]
                 └── nanosleep  [1 | 100.0%]
+```
+
+**Highlight Keyword**
+
+```bash
+
+python3 gdb_bt_forest.py --no-color test_bt1.txt | grep -E 'keyword|$'
+# or using ripgrep
+python3 gdb_bt_forest.py --no-color test_bt1.txt | rg --max-columns=0 --passthru 'keyword'
 ```
 
 ## Author
