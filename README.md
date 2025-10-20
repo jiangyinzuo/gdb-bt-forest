@@ -10,23 +10,20 @@ python3 gdb_bt_forest.py test_bt.txt --threads -g name+file+line
 
 Output:
 ```
-=== Thread-2 :: 1 stacks ===
-└── _start  [1 | 100.0%]
-    └── __libc_start_main  [../csu/libc-start.c:308]  [1 | 100.0%]
-        └── main  [test.c:10]  [1 | 100.0%]
-
 === Thread-1 :: 3 stacks ===
-├── _start  [1 | 33.3%]
-│   └── __libc_start_main  [../csu/libc-start.c:308]  [1 | 33.3%]
-│       └── main  [test.c:10]  [1 | 33.3%]
-├── clone  [../sysdeps/unix/sysv/linux/x86_64/clone.S:95]  [1 | 33.3%]
-│   └── start_thread  [pthread_create.c:463]  [1 | 33.3%]
-│       └── worker_thread  [test.c:25]  [1 | 33.3%]
-│           └── sleep  [../sysdeps/unix/sysv/linux/sleep.c:138]  [1 | 33.3%]
-│               └── nanosleep  [../sysdeps/unix/syscall-template.S:78]  [1 | 33.3%]
-└── main  [test.c:10]  [1 | 33.3%]
-    └── bar  [test.c:20]  [1 | 33.3%]
-        └── foo  [test.c:15]  [1 | 33.3%]
+├── _start  [2 | 66.7%]
+│   └── __libc_start_main  [2 | 66.7%]
+│       └── main  [2 | 66.7%]
+└── main  [1 | 33.3%]
+    └── bar  [1 | 33.3%]
+        └── foo  [1 | 33.3%]
+
+=== Thread-2 :: 1 stacks ===
+└── clone  [1 | 100.0%]
+    └── start_thread  [1 | 100.0%]
+        └── worker_thread  [1 | 100.0%]
+            └── sleep  [1 | 100.0%]
+                └── nanosleep  [1 | 100.0%]
 ```
 
 ## Author

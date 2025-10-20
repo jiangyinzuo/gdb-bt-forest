@@ -2,16 +2,8 @@
 # -*- coding: utf-8 -*-
 # GDB backtrace forest visualizer with wrapped-line handling.
 #
-# Usage:
-#   gdb_bt_forest.py path/to/bt.txt
-#
-# Key features:
-# - Robust unwrapping of lines split by terminal width (joins continuations
-#   until the next '#<num>' or 'Thread <id>' header).
-# - Merge stacks into a prefix-tree and show counts/percentages.
-# - Filters (--keep/--strip), grouping granularity, depth/top pruning, colors.
-#
-# Author: ChatGPT  |  License: MIT
+# Supports grouping (-g name|name+file|name+file+line|full),
+# sibling ordering (--order stable|count|name), and various filters.
 #
 import argparse
 import re
@@ -34,6 +26,8 @@ def parse_args():
     ap.add_argument("-d", "--max-depth", type=int, default=None, help="Limit printed tree depth.")
     ap.add_argument("-g", "--group", choices=["name","name+file","name+file+line","full"], default="name",
                     help="Frame grouping granularity.")
+    ap.add_argument("--order", choices=["count","name","stable"], default="stable",
+                    help="Sibling order: by count (desc), by name (asc), or stable (input order).")
     ap.add_argument("-s", "--strip", action="append", default=[], help="Drop frames that match this regex (can repeat).")
     ap.add_argument("--keep", action="append", default=[], help="Keep only frames that match this regex (filter-in).")
     ap.add_argument("--reverse", action="store_true", help="Do NOT reverse stacks (treat #0 as root).")
@@ -63,13 +57,10 @@ def match_any(s: str, regs: List[re.Pattern]) -> bool:
 
 def reflow_wrapped(lines: Iterable[str], debug: bool=False) -> List[str]:
     """Join terminal-wrapped logical records.
-    A record starts with either:
-      - a frame line:   '^#<num> ...'
-      - a thread line:  '^Thread <id> ...'
-    Subsequent non-empty lines that do NOT start with either are considered
-    continuations and concatenated (hyphenated endings get de-hyphenated).
+    Records start with '^#<num>' or '^Thread <id>'.
+    Continuations (non-empty, non-starter lines) are concatenated.
+    If a line ends with '-', drop it and concat the next line directly.
     Blank lines flush the current record.
-    Non-record lines before any record starters are ignored.
     """
     out: List[str] = []
     buf: Optional[str] = None
@@ -86,15 +77,12 @@ def reflow_wrapped(lines: Iterable[str], debug: bool=False) -> List[str]:
                 out.append(buf)
             buf = line
             continue
-
         if buf is None:
             continue
-
         if not line.strip():
             out.append(buf)
             buf = None
             continue
-
         buf = append_continuation(buf, line)
 
     if buf is not None:
@@ -109,7 +97,7 @@ def reflow_wrapped(lines: Iterable[str], debug: bool=False) -> List[str]:
 class Node:
     key: str
     count: int = 0
-    children: Dict[str, "Node"] = field(default_factory=dict)
+    children: Dict[str, "Node"] = field(default_factory=dict)  # insertion-ordered
     sample_ids: List[int] = field(default_factory=list)
 
     def child(self, k: str) -> "Node":
@@ -119,15 +107,10 @@ class Node:
 
 def frame_key_from_rest(rest: str, grouping: str) -> Tuple[str, Optional[str]]:
     """Return (display_key, file_or_lib_or_path)."""
-    # Strip leading address if present: "0x... in func ..."
     m = ADDR_PREFIX_RE.match(rest)
     if m:
         rest = m.group(2)
-
-    # Extract function/method portion up to ' at ' or ' from '
     func_part = rest.split(" at ")[0].split(" from ")[0].strip()
-
-    # Remove parameter lists for 'name' and 'name+file*' modes to reduce cardinality
     func_name = func_part
     paren = func_part.find("(")
     if paren != -1:
@@ -137,12 +120,12 @@ def frame_key_from_rest(rest: str, grouping: str) -> Tuple[str, Optional[str]]:
     line_no = None
     m = AT_FILE_RE.search(rest)
     if m:
-        file_or_lib = m.group(1)  # path
-        line_no = m.group(2)      # may be None
+        file_or_lib = m.group(1)
+        line_no = m.group(2)
     else:
         m2 = FROM_LIB_RE.search(rest)
         if m2:
-            file_or_lib = m2.group(1)  # .so path
+            file_or_lib = m2.group(1)
 
     if grouping == "name":
         return (func_name or func_part, None)
@@ -154,15 +137,15 @@ def frame_key_from_rest(rest: str, grouping: str) -> Tuple[str, Optional[str]]:
         if file_or_lib and line_no:
             return (f"{func_name or func_part}  [{file_or_lib}:{line_no}]", file_or_lib)
         elif file_or_lib:
-            # For 'from lib.so' or missing line info, fall back to file only
             return (f"{func_name or func_part}  [{file_or_lib}]", file_or_lib)
         else:
             return (func_name or func_part, None)
-    else:  # full
+    else:
         full = re.sub(r"\s+", " ", rest.strip())
         return (full, file_or_lib)
 
 def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per_thread=False, debug=False) -> Dict[str, List[List[str]]]:
+    """Parse lines into stacks. Thread headers flush the *previous* thread's partial stack (bugfix)."""
     stacks_by_thread: Dict[str, List[List[str]]] = defaultdict(list)
     cur_frames: List[str] = []
     cur_thread = "ALL"
@@ -170,11 +153,12 @@ def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per
     for line in lines:
         mt = THREAD_RE.match(line)
         if mt:
-            if per_thread:
-                cur_thread = f"Thread-{mt.group('tid')}"
+            # BUGFIX: flush current frames to the *current* thread before switching
             if cur_frames:
                 stacks_by_thread[cur_thread].append(cur_frames)
                 cur_frames = []
+            if per_thread:
+                cur_thread = f"Thread-{mt.group('tid')}"
             continue
 
         mf = FRAME_RE.match(line)
@@ -187,7 +171,6 @@ def parse_stacks(lines: Iterable[str], grouping: str, keep_regs, strip_regs, per
         rest = mf.group("rest").strip()
         key, _ = frame_key_from_rest(rest, grouping)
 
-        # Filter phase
         if keep_regs and not match_any(key, keep_regs):
             continue
         if strip_regs and match_any(key, strip_regs):
@@ -214,10 +197,18 @@ def build_forest(stacks: List[List[str]], reverse=False) -> "Node":
         node = root
         node.count += 1
         for k in stack:
-            node = node.child(k)
+            node = node.child(k)  # preserves first-seen insertion order
             node.count += 1
         node.sample_ids.append(sid)
     return root
+
+def iter_children(node: "Node", order: str):
+    if order == "stable":
+        return node.children.items()
+    elif order == "name":
+        return iter(sorted(node.children.items(), key=lambda kv: kv[0]))
+    else:  # "count"
+        return iter(sorted(node.children.items(), key=lambda kv: (-kv[1].count, kv[0])))
 
 def print_forest(root: "Node", total: int, args):
     if args.ascii:
@@ -235,7 +226,7 @@ def print_forest(root: "Node", total: int, args):
         return f"{name}  [{c} | {pct:.1f}%]"
 
     def rec(node: "Node", pref: str, depth: int):
-        items = sorted(node.children.items(), key=lambda kv: (-kv[1].count, kv[0]))
+        items = list(iter_children(node, args.order))
         if args.top is not None and depth == 0:
             items = items[:args.top]
         n = len(items)
