@@ -9,7 +9,7 @@ A Python tool that processes GDB backtrace (`bt`) outputs and visualizes them as
 **Basic Usage**
 
 ```bash
-python3 gdb_bt_forest.py test_bt1.txt --threads -g name+file+line
+python3 gdb_bt_forest.py test/test_bt1.txt --threads -g name+file+line
 ```
 
 Output:
@@ -34,16 +34,20 @@ Output:
 
 ```bash
 
-python3 gdb_bt_forest.py --no-color test_bt1.txt | grep -E 'keyword|$'
+python3 gdb_bt_forest.py --no-color test/test_bt1.txt | grep -E 'keyword|$'
 # or using ripgrep
-python3 gdb_bt_forest.py --no-color test_bt1.txt | rg --max-columns=0 --passthru 'keyword'
+python3 gdb_bt_forest.py --no-color test/test_bt1.txt | rg --max-columns=0 --passthru 'keyword'
 ```
 
 **Generate Mermaid Diagram**
 ```bash
-python3 gdb_bt_forest.py dag_test_bt.txt --graph mermaid
+python3 gdb_bt_forest.py test/dag_test_bt.txt --graph mermaid
 ```
 
+**Merge Mermaid Diagrams**
+```bash
+python3 merge_mermaid.py test/a.mmd test/b.mmd
+```
 ## Author
 
 ChatGPT and jiangyinzuo
