@@ -2,6 +2,8 @@
 
 A Python tool that processes GDB backtrace (`bt`) outputs and visualizes them as a call forest 🌲.
 
+**Requirement:** Python 3.7+
+
 ## Usage
 
 **Basic Usage**
@@ -35,6 +37,11 @@ Output:
 python3 gdb_bt_forest.py --no-color test_bt1.txt | grep -E 'keyword|$'
 # or using ripgrep
 python3 gdb_bt_forest.py --no-color test_bt1.txt | rg --max-columns=0 --passthru 'keyword'
+```
+
+**Generate Mermaid Diagram**
+```bash
+python3 gdb_bt_forest.py dag_test_bt.txt --graph mermaid
 ```
 
 ## Author

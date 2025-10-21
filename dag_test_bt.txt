@@ -1,0 +1,62 @@
+Thread 1 "main" running.
+#0  X (arg=0x1) at x.c:5
+#1  A (n=42) at a.c:10
+#2  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#3  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x000055555555508e in _start ()
+
+# another sample hitting X via B (shared child X)
+#0  X (arg=0x2) at x.c:5
+#1  B (k=7) at b.c:20
+#2  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#3  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x000055555555508e in _start ()
+
+# shared chain C->Y->X
+#0  X () at x.c:5
+#1  Y () at y.c:15
+#2  C () at c.c:30
+#3  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#4  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#5  0x000055555555508e in _start ()
+
+# Z shares parent A with first stack
+#0  Z () at z.c:7
+#1  A (n=42) at a.c:10
+#2  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#3  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x000055555555508e in _start ()
+
+# Functor & templates with parentheses-inside-name
+#0  ns::Functor::operator()() at functor.cc:12
+#1  Dispatcher::dispatch() at dispatcher.cc:21
+#2  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#3  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x000055555555508e in _start ()
+
+#0  Foo<(int)3>::bar() at foo.cc:33
+#1  Helper::go() noexcept at helper.cc:44
+#2  main (argc=1, argv=0x7fffffffe3f8) at main.c:50
+#3  0x00007ffff7a5b2a5 in __libc_start_main (main=0x555555555149 <main>, argc=1, argv=0x7fffffffe3f8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffffffe3e8) from /lib/x86_64-linux-gnu/libc.so.6
+#4  0x000055555555508e in _start ()
+
+# Insert wrapped lines (hyphenated) to test unwrapping:
+Thread 2 "worker" run-
+ning.
+#0  0x00007ffff7bc5e6d in nanosleep () at ../sysdeps/unix/syscall-temp-
+late.S:78
+#1  0x00007ffff7bc5d44 in sleep (seconds=1) at ../sysdeps/unix/sysv/lin-
+ux/sleep.c:138
+#2  worker_thread (arg=0x0) at worker.c:25
+#3  0x00007ffff7bb76db in start_thread (arg=0x7ffff6ffd700) at pth-
+read_create.c:463
+#4  0x00007ffff7ae5a3f in clone () at ../sysdeps/unix/sysv/linux/x86_64/clo-
+ne.S:95
+
+# Another sample on Thread 2 sharing Y->X path with Thread 1
+Thread 2 "worker" running.
+#0  X () at x.c:5
+#1  Y () at y.c:15
+#2  worker_thread (arg=0x0) at worker.c:25
+#3  0x00007ffff7bb76db in start_thread (arg=0x7ffff6ffd700) at pthread_create.c:463
+#4  0x00007ffff7ae5a3f in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:95
